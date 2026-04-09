@@ -11,7 +11,7 @@ set -u
 #     project=/home/xjc/work/ultralytics/runs/detect \
 #     name=rtdetr_train
 
-MAX_RETRIES="${MAX_RETRIES:-20}"
+MAX_RETRIES="${MAX_RETRIES:-100}"
 SLEEP_SECONDS="${SLEEP_SECONDS:-5}"
 
 if [[ $# -eq 0 ]]; then
