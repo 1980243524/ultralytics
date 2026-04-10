@@ -19,6 +19,8 @@ backbone:
   - [-1, 6, HGBlock, [96, 512, 3]] # stage 2
 
   - [-1, 1, DWConv, [512, 3, 2, 1, False]] # 4-P4/16
+  
+  - [-1, 2, FEM,[512]]
   - [-1, 6, HGBlock, [192, 1024, 5, True, False]] # cm, c2, k, light, shortcut
   - [-1, 6, HGBlock, [192, 1024, 5, True, True]]
   - [-1, 6, HGBlock, [192, 1024, 5, True, True]] # stage 3
@@ -29,7 +31,6 @@ backbone:
 head:
   - [-1, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 10 input_proj.2
   - [-1, 1, AIFI, [1024, 8]]
-  - [-1, 1, FEM,[256]]
   - [-1, 1, Conv, [256, 1, 1]] # 12, Y5, lateral_convs.0
 
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
