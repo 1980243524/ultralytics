@@ -2318,3 +2318,52 @@ class RealNVP(nn.Module):
             self.float()
         z, log_det = self.backward_p(x)
         return self.prior.log_prob(z) + log_det
+
+class CAA(nn.Module):
+    """Context Anchor Attention for PKINet."""
+    def __init__(self, c, k=11):
+        super().__init__()
+        self.pool = nn.AvgPool2d(kernel_size=5, stride=1, padding=2)
+        self.conv1 = Conv(c, c, 1, 1)
+        self.conv2 = Conv(c, c, (1, k), 1, g=c)
+        self.conv3 = Conv(c, c, (k, 1), 1, g=c)
+        self.conv4 = nn.Conv2d(c, c, 1, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        return self.sigmoid(self.conv4(self.conv3(self.conv2(self.conv1(self.pool(x))))))
+
+class PKIModule(nn.Module):
+    """PKI Module for PKINet."""
+    def __init__(self, c):
+        super().__init__()
+        self.conv1 = Conv(c, c, 3, 1, g=c)
+        self.conv_5x5 = Conv(c, c, 5, 1, g=c)
+        self.conv_7x7 = Conv(c, c, 7, 1, g=c)
+        self.conv_9x9 = Conv(c, c, 9, 1, g=c)
+        self.conv_11x11 = Conv(c, c, 11, 1, g=c)
+        self.conv_out = Conv(c, c, 1, 1)
+
+    def forward(self, x):
+        x_3x3 = self.conv1(x)
+        z1 = self.conv_5x5(x_3x3)
+        z2 = self.conv_7x7(x_3x3)
+        z3 = self.conv_9x9(x_3x3)
+        z4 = self.conv_11x11(x_3x3)
+        out = z1 + z2 + z3 + z4 + x_3x3
+        return self.conv_out(out)
+
+class PKIBlock(nn.Module):
+    """Poly Kernel Inception Block from PKINet."""
+    def __init__(self, c1, c2):
+        super().__init__()
+        self.pki = PKIModule(c1)
+        self.caa = CAA(c1)
+        self.conv = Conv(c1, c2, 1, 1)
+
+    def forward(self, x):
+        p = self.pki(x)
+        a = self.caa(x)
+        f_attn = p * a + p
+        return self.conv(f_attn)
+

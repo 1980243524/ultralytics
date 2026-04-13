@@ -41,13 +41,16 @@ head:
   - [3, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 19 input_proj.0
   - [[-2, -1], 1, Concat, [1]] # cat backbone P4
   - [-1, 3, RepC3, [256]] # X3 (21), fpn_blocks.1
+  - [-1, 1, PKIBlock, [256]] # 22: Insert PKIBlock here to enhance P3 features (small objects)
 
-  - [-1, 1, Conv, [256, 3, 2]] # 22, downsample_convs.0
+  - [-1, 1, Conv, [256, 3, 2]] # 23, downsample_convs.0
   - [[-1, 17], 1, Concat, [1]] # cat Y4
-  - [-1, 3, RepC3, [256]] # F4 (24), pan_blocks.0
+  - [-1, 3, RepC3, [256]] # F4 (25), pan_blocks.0
+  - [-1, 1, PKIBlock, [256]] # 26: Insert PKIBlock here to enhance P4 features (medium objects)
 
-  - [-1, 1, Conv, [256, 3, 2]] # 25, downsample_convs.1
+  - [-1, 1, Conv, [256, 3, 2]] # 27, downsample_convs.1
   - [[-1, 12], 1, Concat, [1]] # cat Y5
-  - [-1, 3, RepC3, [256]] # F5 (27), pan_blocks.1
+  - [-1, 3, RepC3, [256]] # F5 (29), pan_blocks.1
+  - [-1, 1, PKIBlock, [256]] # 30: Insert PKIBlock here to enhance P5 features (large objects)
 
-  - [[21, 24, 27], 1, RTDETRDecoder, [nc]] # RTDETRDecoder(P3, P4, P5)
+  - [[22, 26, 30], 1, RTDETRDecoder, [nc]] # RTDETRDecoder(P3, P4, P5)

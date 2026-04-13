@@ -59,6 +59,9 @@ from .block import (
     ResNetLayer,
     SCDown,
     TorchVision,
+    PKIBlock,
+    CAA,
+    PKIModule,
 )
 from .conv import (
     CBAM,
@@ -107,6 +110,9 @@ from .transformer import (
 )
 
 __all__ = (
+    "PKIBlock",
+    "CAA",
+    "PKIModule",
     "AIFI",
     "C1",
     "C2",
