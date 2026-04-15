@@ -85,9 +85,6 @@ def bbox_iou(
     GIoU: bool = False,
     DIoU: bool = False,
     CIoU: bool = False,
-    WIoU: bool = False,
-    Inner: bool = False,
-    ratio: float = 0.7,
     eps: float = 1e-7,
 ) -> torch.Tensor:
     """Calculate the Intersection over Union (IoU) between bounding boxes.
@@ -104,14 +101,10 @@ def bbox_iou(
         GIoU (bool, optional): If True, calculate Generalized IoU.
         DIoU (bool, optional): If True, calculate Distance IoU.
         CIoU (bool, optional): If True, calculate Complete IoU.
-        WIoU (bool, optional): If True, calculate Wise IoU with dynamic focusing mechanism.
-        Inner (bool, optional): If True, use inner bounding boxes to compute a more precise IoU. Can be combined with
-            any of the other IoU variants (GIoU, DIoU, CIoU, WIoU). When used alone, returns plain Inner-IoU.
-        ratio (float, optional): Scale ratio for inner box size when Inner=True.
         eps (float, optional): A small value to avoid division by zero.
 
     Returns:
-        (torch.Tensor): IoU, GIoU, DIoU, CIoU, or WIoU values depending on the specified flags.
+        (torch.Tensor): IoU, GIoU, DIoU, or CIoU values depending on the specified flags.
     """
     # Get the coordinates of bounding boxes
     if xywh:  # transform from xywh to xyxy
@@ -125,7 +118,7 @@ def bbox_iou(
         w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1 + eps
         w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + eps
 
-    # Intersection area (always computed for GIoU penalty or when Inner=False)
+    # Intersection area
     inter = (b1_x2.minimum(b2_x2) - b1_x1.maximum(b2_x1)).clamp_(0) * (
         b1_y2.minimum(b2_y2) - b1_y1.maximum(b2_y1)
     ).clamp_(0)
@@ -133,37 +126,8 @@ def bbox_iou(
     # Union Area
     union = w1 * h1 + w2 * h2 - inter + eps
 
-    # Inner-IoU: shrink both boxes by ratio to compute a more stable overlap region
-    if Inner:
-        # Scale box dimensions inward from each box's centre
-        inner_b1_x1 = b1_x1 + w1 * (1 - ratio) / 2
-        inner_b1_x2 = b1_x2 - w1 * (1 - ratio) / 2
-        inner_b1_y1 = b1_y1 + h1 * (1 - ratio) / 2
-        inner_b1_y2 = b1_y2 - h1 * (1 - ratio) / 2
-        inner_b2_x1 = b2_x1 + w2 * (1 - ratio) / 2
-        inner_b2_x2 = b2_x2 - w2 * (1 - ratio) / 2
-        inner_b2_y1 = b2_y1 + h2 * (1 - ratio) / 2
-        inner_b2_y2 = b2_y2 - h2 * (1 - ratio) / 2
-        inner_inter = (inner_b1_x2.minimum(inner_b2_x2) - inner_b1_x1.maximum(inner_b2_x1)).clamp_(0) * (
-            inner_b1_y2.minimum(inner_b2_y2) - inner_b1_y1.maximum(inner_b2_y1)
-        ).clamp_(0)
-        inner_union = (w1 * h1 + w2 * h2) * ratio**2 - inner_inter + eps
-        iou = inner_inter / inner_union
-    else:
-        # IoU
-        iou = inter / union
-
-    if WIoU:
-        # Wise-IoU: dynamically focuses on medium-quality anchor boxes via a monotonically increasing
-        # focusing coefficient. Reference: https://arxiv.org/abs/2301.10051
-        # Compute centre distance squared and enclosing diagonal squared
-        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)
-        ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)
-        c2 = cw.pow(2) + ch.pow(2) + eps
-        rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)) / 4
-        # Wise focusing coefficient β
-        wise_factor = torch.exp(rho2 / c2)
-        return wise_factor * (1 - iou)  # WIoU loss (lower is better, consistent with other loss forms)
+    # IoU
+    iou = inter / union
     if CIoU or DIoU or GIoU:
         cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
         ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height

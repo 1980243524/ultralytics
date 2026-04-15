@@ -12,7 +12,6 @@ import torch.nn as nn
 __all__ = (
     "CBAM",
     "ChannelAttention",
-    "CoordAtt",
     "Concat",
     "Conv",
     "Conv2",
@@ -612,66 +611,6 @@ class CBAM(nn.Module):
             (torch.Tensor): Attended output tensor.
         """
         return self.spatial_attention(self.channel_attention(x))
-
-
-class CoordAtt(nn.Module):
-    """Coordinate Attention module for mobile networks.
-
-    This module embeds positional information into channel attention, capturing long-range spatial dependencies along
-    both horizontal and vertical directions while preserving precise positional information.
-
-    Reference:
-        Hou, Q., Zhou, D., & Feng, J. (2021). Coordinate Attention for Efficient Mobile Network Design. CVPR.
-        https://arxiv.org/abs/2103.02907
-
-    Attributes:
-        pool_h (nn.AdaptiveAvgPool2d): Average pooling along the height dimension.
-        pool_w (nn.AdaptiveAvgPool2d): Average pooling along the width dimension.
-        conv1 (Conv): Intermediate shared convolution to reduce channels.
-        conv_h (nn.Conv2d): Output projection for height direction.
-        conv_w (nn.Conv2d): Output projection for width direction.
-    """
-
-    def __init__(self, c1: int, c2: int, reduction: int = 32, act: nn.Module = nn.Hardswish()):
-        """Initialize the CoordAtt module.
-
-        Args:
-            c1 (int): Number of input channels.
-            c2 (int): Number of output channels.
-            reduction (int): Channel reduction factor for the intermediate representation.
-            act (nn.Module): Activation function for the shared intermediate convolution.
-        """
-        super().__init__()
-        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
-        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-        mid_channels = max(8, c1 // reduction)
-        self.conv1 = Conv(c1, mid_channels, 1, act=act)
-        self.conv_h = nn.Conv2d(mid_channels, c2, 1)
-        self.conv_w = nn.Conv2d(mid_channels, c2, 1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply coordinate attention to input feature map.
-
-        Args:
-            x (torch.Tensor): Input tensor with shape (B, C, H, W).
-
-        Returns:
-            (torch.Tensor): Output tensor with shape (B, C, H, W).
-        """
-        identity = x
-        n, c, h, w = x.shape
-        # Pool along H and W directions to capture coordinate information
-        x_h = self.pool_h(x)  # (B, C, H, 1)
-        x_w = self.pool_w(x).permute(0, 1, 3, 2)  # (B, C, 1, W) -> (B, C, W, 1)
-        # Concatenate along spatial dim and apply shared conv
-        y = torch.cat([x_h, x_w], dim=2)  # (B, C, H+W, 1)
-        y = self.conv1(y)
-        # Split and apply directional projections
-        x_h, x_w = torch.split(y, [h, w], dim=2)
-        x_w = x_w.permute(0, 1, 3, 2)  # (B, mid, 1, W)
-        a_h = self.conv_h(x_h).sigmoid()
-        a_w = self.conv_w(x_w).sigmoid()
-        return identity * a_h * a_w
 
 
 class Concat(nn.Module):

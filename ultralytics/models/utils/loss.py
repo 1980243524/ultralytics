@@ -17,8 +17,8 @@ from .ops import HungarianMatcher
 class DETRLoss(nn.Module):
     """DETR (DEtection TRansformer) Loss class for calculating various loss components.
 
-    This class computes classification loss, bounding box loss, GIoU/WIoU loss, and optionally auxiliary losses for
-    the DETR object detection model.
+    This class computes classification loss, bounding box loss, GIoU loss, and optionally auxiliary losses for the DETR
+    object detection model.
 
     Attributes:
         nc (int): Number of classes.
@@ -28,7 +28,6 @@ class DETRLoss(nn.Module):
         use_vfl (bool): Whether to use VarifocalLoss.
         use_uni_match (bool): Whether to use a fixed layer for auxiliary branch label assignment.
         uni_match_ind (int): Index of fixed layer to use if use_uni_match is True.
-        use_wiou (bool): Whether to use WIoU loss instead of GIoU.
         matcher (HungarianMatcher): Object to compute matching cost and indices.
         fl (FocalLoss | None): Focal Loss object if use_fl is True, otherwise None.
         vfl (VarifocalLoss | None): Varifocal Loss object if use_vfl is True, otherwise None.
@@ -46,7 +45,6 @@ class DETRLoss(nn.Module):
         uni_match_ind: int = 0,
         gamma: float = 1.5,
         alpha: float = 0.25,
-        use_wiou: bool = False,
     ):
         """Initialize DETR loss function with customizable components and gains.
 
@@ -63,7 +61,6 @@ class DETRLoss(nn.Module):
             uni_match_ind (int): Index of fixed layer for uni_match.
             gamma (float): The focusing parameter that controls how much the loss focuses on hard-to-classify examples.
             alpha (float): The balancing factor used to address class imbalance.
-            use_wiou (bool): Whether to use WIoU loss instead of GIoU for bounding box regression.
         """
         super().__init__()
 
@@ -75,7 +72,6 @@ class DETRLoss(nn.Module):
         self.aux_loss = aux_loss
         self.fl = FocalLoss(gamma, alpha) if use_fl else None
         self.vfl = VarifocalLoss(gamma, alpha) if use_vfl else None
-        self.use_wiou = use_wiou
 
         self.use_uni_match = use_uni_match
         self.uni_match_ind = uni_match_ind
@@ -125,7 +121,7 @@ class DETRLoss(nn.Module):
     def _get_loss_bbox(
         self, pred_bboxes: torch.Tensor, gt_bboxes: torch.Tensor, postfix: str = ""
     ) -> dict[str, torch.Tensor]:
-        """Compute bounding box and IoU losses for predicted and ground truth bounding boxes.
+        """Compute bounding box and GIoU losses for predicted and ground truth bounding boxes.
 
         Args:
             pred_bboxes (torch.Tensor): Predicted bounding boxes with shape (N, 4).
@@ -135,8 +131,7 @@ class DETRLoss(nn.Module):
         Returns:
             (dict[str, torch.Tensor]): Dictionary containing:
                 - loss_bbox{postfix}: L1 loss between predicted and ground truth boxes, scaled by the bbox loss gain.
-                - loss_giou{postfix}: IoU loss (GIoU or WIoU) between predicted and ground truth boxes, scaled by the
-                  giou loss gain.
+                - loss_giou{postfix}: GIoU loss between predicted and ground truth boxes, scaled by the giou loss gain.
 
         Notes:
             If no ground truth boxes are provided (empty list), zero-valued tensors are returned for both losses.
@@ -152,10 +147,7 @@ class DETRLoss(nn.Module):
             return loss
 
         loss[name_bbox] = self.loss_gain["bbox"] * F.l1_loss(pred_bboxes, gt_bboxes, reduction="sum") / len(gt_bboxes)
-        if self.use_wiou:
-            loss[name_giou] = bbox_iou(pred_bboxes, gt_bboxes, xywh=True, WIoU=True)
-        else:
-            loss[name_giou] = 1.0 - bbox_iou(pred_bboxes, gt_bboxes, xywh=True, GIoU=True)
+        loss[name_giou] = 1.0 - bbox_iou(pred_bboxes, gt_bboxes, xywh=True, GIoU=True)
         loss[name_giou] = loss[name_giou].sum() / len(gt_bboxes)
         loss[name_giou] = self.loss_gain["giou"] * loss[name_giou]
         return {k: v.squeeze() for k, v in loss.items()}
