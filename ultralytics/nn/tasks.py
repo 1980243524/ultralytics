@@ -19,10 +19,12 @@ from ultralytics.nn.modules import (
     C3,
     C3TR,
     ELAN1,
+    EMA,
     OBB,
     OBB26,
     PSA,
     SPP,
+    SPDConv,
     SPPELAN,
     SPPF,
     A2C2f,
@@ -55,6 +57,7 @@ from ultralytics.nn.modules import (
     ImagePoolingAttn,
     Index,
     LRPCHead,
+    LSKBlock,
     Pose,
     Pose26,
     RepC3,
@@ -1789,6 +1792,7 @@ def parse_model(d, ch, verbose=True):
             SCDown,
             C2fCIB,
             A2C2f,
+            SPDConv,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1854,6 +1858,8 @@ def parse_model(d, ch, verbose=True):
             if m is C2fCIB:
                 legacy = False
         elif m is AIFI:
+            args = [ch[f], *args]
+        elif m in frozenset({LSKBlock, EMA}):
             args = [ch[f], *args]
         elif m in frozenset({HGStem, HGBlock}):
             c1, cm, c2 = ch[f], args[0], args[1]

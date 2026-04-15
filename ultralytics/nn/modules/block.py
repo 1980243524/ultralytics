@@ -20,9 +20,12 @@ __all__ = (
     "C3TR",
     "CIB",
     "DFL",
+    "EMA",
     "ELAN1",
+    "LSKBlock",
     "PSA",
     "SPP",
+    "SPDConv",
     "SPPELAN",
     "SPPF",
     "AConv",
@@ -2318,3 +2321,147 @@ class RealNVP(nn.Module):
             self.float()
         z, log_det = self.backward_p(x)
         return self.prior.log_prob(z) + log_det
+
+
+class SPDConv(nn.Module):
+    """Space-to-Depth Convolution (BMVC 2022).
+
+    Replaces strided convolutions to prevent information loss during downsampling,
+    critical for small object preservation in remote sensing imagery. The spatial
+    information is rearranged into the channel dimension without any loss, then
+    a 1x1 convolution adjusts the channel count.
+
+    Reference: https://arxiv.org/abs/2208.03641
+    """
+
+    def __init__(self, c1: int, c2: int):
+        """Initialize SPDConv.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+        """
+        super().__init__()
+        self.conv = Conv(c1 * 4, c2, 1, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass: space-to-depth then 1x1 conv.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+
+        Returns:
+            (torch.Tensor): Output tensor of shape (B, c2, H/2, W/2).
+        """
+        return self.conv(
+            torch.cat(
+                [x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]],
+                dim=1,
+            )
+        )
+
+
+class LSKBlock(nn.Module):
+    """Large Selective Kernel block (ICCV 2023) for remote sensing.
+
+    Uses large-kernel decomposed convolutions (5x5 + dilated 7x7) with a spatial
+    selection mechanism to dynamically aggregate multi-scale context. Specifically
+    designed for remote sensing where objects have diverse scales and orientations.
+
+    Reference: https://arxiv.org/abs/2303.09030
+    """
+
+    def __init__(self, c1: int, c2: int = None):
+        """Initialize LSKBlock.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels (defaults to c1).
+        """
+        super().__init__()
+        c2 = c2 or c1
+        self.conv0 = nn.Conv2d(c1, c2, 5, padding=2, groups=c2)
+        self.conv_spatial = nn.Conv2d(c2, c2, 7, stride=1, padding=9, groups=c2, dilation=3)
+        self.conv1 = nn.Conv2d(c2, c2 // 2, 1)
+        self.conv2 = nn.Conv2d(c2, c2 // 2, 1)
+        self.conv_squeeze = nn.Conv2d(2, 2, 7, padding=3)
+        self.conv_out = nn.Conv2d(c2 // 2, c2, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass with large selective kernel attention.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+
+        Returns:
+            (torch.Tensor): Attention-weighted output of shape (B, C, H, W).
+        """
+        attn1 = self.conv0(x)
+        attn2 = self.conv_spatial(attn1)
+
+        attn1 = self.conv1(attn1)
+        attn2 = self.conv2(attn2)
+
+        attn = torch.cat([attn1, attn2], dim=1)
+        avg_attn = torch.mean(attn, dim=1, keepdim=True)
+        max_attn = torch.amax(attn, dim=1, keepdim=True)
+        agg = torch.cat([avg_attn, max_attn], dim=1)
+        sig = self.conv_squeeze(agg).sigmoid()
+
+        attn = attn1 * sig[:, 0:1] + attn2 * sig[:, 1:2]
+        attn = self.conv_out(attn)
+        return x * attn
+
+
+class EMA(nn.Module):
+    """Efficient Multi-scale Attention (ICASSP 2023).
+
+    Parallel multi-branch attention with cross-spatial learning that captures
+    multi-scale context efficiently. Uses grouped channel splitting with
+    height/width pooling and cross-branch interaction.
+
+    Reference: https://arxiv.org/abs/2305.13563v2
+    """
+
+    def __init__(self, c1: int, factor: int = 8):
+        """Initialize EMA.
+
+        Args:
+            c1 (int): Input/output channels (must be divisible by factor).
+            factor (int): Number of groups for channel splitting.
+        """
+        super().__init__()
+        self.groups = factor
+        assert c1 // self.groups > 0, f"channels {c1} must be divisible by factor {factor}"
+        self.softmax = nn.Softmax(dim=-1)
+        self.agp = nn.AdaptiveAvgPool2d((1, 1))
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+        gc = c1 // self.groups
+        self.gn = nn.GroupNorm(gc, gc)
+        self.conv1x1 = nn.Conv2d(gc, gc, kernel_size=1, stride=1, padding=0)
+        self.conv3x3 = nn.Conv2d(gc, gc, kernel_size=3, stride=1, padding=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass with efficient multi-scale attention.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+
+        Returns:
+            (torch.Tensor): Attention-weighted output of shape (B, C, H, W).
+        """
+        b, c, h, w = x.size()
+        group_x = x.reshape(b * self.groups, -1, h, w)
+        x_h = self.pool_h(group_x)
+        x_w = self.pool_w(group_x).permute(0, 1, 3, 2)
+        hw = self.conv1x1(torch.cat([x_h, x_w], dim=2))
+        x_h, x_w = torch.split(hw, [h, w], dim=2)
+        x1 = self.gn(group_x * x_h.sigmoid() * x_w.permute(0, 1, 3, 2).sigmoid())
+        x2 = self.conv3x3(group_x)
+        x11 = self.softmax(self.agp(x1).reshape(b * self.groups, -1, 1).permute(0, 2, 1))
+        x12 = x2.reshape(b * self.groups, c // self.groups, -1)
+        x21 = self.softmax(self.agp(x2).reshape(b * self.groups, -1, 1).permute(0, 2, 1))
+        x22 = x1.reshape(b * self.groups, c // self.groups, -1)
+        weights = (torch.matmul(x11, x12) + torch.matmul(x21, x22)).reshape(b * self.groups, 1, h, w)
+        return (group_x * weights.sigmoid()).reshape(b, c, h, w)

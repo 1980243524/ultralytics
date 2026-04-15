@@ -1,53 +1,72 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
-# Ultralytics RT-DETR-l hybrid object detection model with P3/8 - P5/32 outputs
-# Model docs: https://docs.ultralytics.com/models/rtdetr
-# Task docs: https://docs.ultralytics.com/tasks/detect
+# RT-DETR-l optimized for small object detection in remote sensing imagery
+# Key improvements:
+#   1. SPDConv replaces strided DWConv to prevent information loss during downsampling
+#   2. LSKBlock in backbone for large-kernel multi-scale context (ICCV 2023)
+#   3. P2 (stride-4) detection layer for fine-grained small object features
+#   4. EMA attention in neck for efficient multi-scale feature enhancement (ICASSP 2023)
+#   5. Increased decoder queries (300->500) for dense small object scenarios
 
 # Parameters
 nc: 80 # number of classes
-scales: # model compound scaling constants, i.e. 'model=rtdetr-l.yaml' will call rtdetr-l.yaml with scale 'l'
+scales: # model compound scaling constants
   # [depth, width, max_channels]
   l: [1.00, 1.00, 1024]
 
 backbone:
   # [from, repeats, module, args]
   - [-1, 1, HGStem, [32, 48]] # 0-P2/4
-  - [-1, 6, HGBlock, [48, 128, 3]] # stage 1
+  - [-1, 6, HGBlock, [48, 128, 3]] # 1 stage 1
 
-  - [-1, 1, DWConv, [128, 3, 2, 1, False]] # 2-P3/8
-  - [-1, 6, HGBlock, [96, 512, 3]] # stage 2
+  - [-1, 1, SPDConv, [128]] # 2-P3/8 (SPDConv: lossless downsampling)
+  - [-1, 6, HGBlock, [96, 512, 3]] # 3 stage 2
 
-  - [-1, 1, DWConv, [512, 3, 2, 1, False]] # 4-P4/16
-  - [-1, 6, HGBlock, [192, 1024, 5, True, False]] # cm, c2, k, light, shortcut
-  - [-1, 6, HGBlock, [192, 1024, 5, True, True]]
-  - [-1, 6, HGBlock, [192, 1024, 5, True, True]] # stage 3
+  - [-1, 1, SPDConv, [512]] # 4-P4/16
+  - [-1, 6, HGBlock, [192, 1024, 5, True, False]] # 5 cm, c2, k, light, shortcut
+  - [-1, 6, HGBlock, [192, 1024, 5, True, True]] # 6
+  - [-1, 6, HGBlock, [192, 1024, 5, True, True]] # 7 stage 3
+  - [-1, 1, LSKBlock, []] # 8 large selective kernel attention
 
-  - [-1, 1, DWConv, [1024, 3, 2, 1, False]] # 8-P5/32
-  - [-1, 6, HGBlock, [384, 2048, 5, True, False]] # stage 4
+  - [-1, 1, SPDConv, [1024]] # 9-P5/32
+  - [-1, 6, HGBlock, [384, 2048, 5, True, False]] # 10 stage 4
+  - [-1, 1, LSKBlock, []] # 11 large selective kernel attention
 
 head:
-  - [-1, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 10 input_proj.2
-  - [-1, 1, AIFI, [1024, 8]]
-  - [-1, 1, Conv, [256, 1, 1]] # 12, Y5, lateral_convs.0
+  - [-1, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 12 input_proj.2
+  - [-1, 1, AIFI, [1024, 8]] # 13
+  - [-1, 1, Conv, [256, 1, 1]] # 14, Y5, lateral_convs.0
 
-  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
-  - [7, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 14 input_proj.1
-  - [[-2, -1], 1, Concat, [1]]
-  - [-1, 3, RepC3, [256]] # 16, fpn_blocks.0
-  - [-1, 1, Conv, [256, 1, 1]] # 17, Y4, lateral_convs.1
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 15
+  - [7, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 16 input_proj.1
+  - [[-2, -1], 1, Concat, [1]] # 17
+  - [-1, 3, RepC3, [256]] # 18, fpn_blocks.0
+  - [-1, 1, EMA, [8]] # 19, EMA attention
+  - [-1, 1, Conv, [256, 1, 1]] # 20, Y4, lateral_convs.1
 
-  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
-  - [3, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 19 input_proj.0
-  - [[-2, -1], 1, Concat, [1]] # cat backbone P4
-  - [-1, 3, RepC3, [256]] # X3 (21), fpn_blocks.1
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 21
+  - [3, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 22 input_proj.0 (from stage2 P3)
+  - [[-2, -1], 1, Concat, [1]] # 23
+  - [-1, 3, RepC3, [256]] # 24, X3, fpn_blocks.1
+  - [-1, 1, EMA, [8]] # 25, EMA attention
 
-  - [-1, 1, Conv, [256, 3, 2]] # 22, downsample_convs.0
-  - [[-1, 17], 1, Concat, [1]] # cat Y4
-  - [-1, 3, RepC3, [256]] # F4 (24), pan_blocks.0
+  # ---- P2 branch (stride-4, high-resolution for small objects) ----
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 26 upsample to P2
+  - [1, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 27 input_proj from stage1 (P2)
+  - [[-2, -1], 1, Concat, [1]] # 28
+  - [-1, 3, RepC3, [256]] # 29, X2 (P2 level)
 
-  - [-1, 1, Conv, [256, 3, 2]] # 25, downsample_convs.1
-  - [[-1, 12], 1, Concat, [1]] # cat Y5
-  - [-1, 3, RepC3, [256]] # F5 (27), pan_blocks.1
+  # ---- PAN: bottom-up path ----
+  - [-1, 1, Conv, [256, 3, 2]] # 30, downsample_convs.0
+  - [[-1, 25], 1, Concat, [1]] # 31 cat X3
+  - [-1, 3, RepC3, [256]] # 32, F3
 
-  - [[21, 24, 27], 1, RTDETRDecoder, [nc]] # RTDETRDecoder(P3, P4, P5)
+  - [-1, 1, Conv, [256, 3, 2]] # 33, downsample_convs.1
+  - [[-1, 20], 1, Concat, [1]] # 34 cat Y4
+  - [-1, 3, RepC3, [256]] # 35, F4
+
+  - [-1, 1, Conv, [256, 3, 2]] # 36, downsample_convs.2
+  - [[-1, 14], 1, Concat, [1]] # 37 cat Y5
+  - [-1, 3, RepC3, [256]] # 38, F5
+
+  - [[29, 32, 35, 38], 1, RTDETRDecoder, [nc, 256, 500, 8, 6]] # Decoder(P2, P3, P4, P5), 500 queries
