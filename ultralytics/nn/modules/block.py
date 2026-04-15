@@ -9,13 +9,14 @@ import torch.nn.functional as F
 
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
-from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
+from .conv import Conv, CoordAtt, DWConv, GhostConv, LightConv, RepConv, autopad
 from .transformer import TransformerBlock
 
 __all__ = (
     "C1",
     "C2",
     "C2PSA",
+    "C2f_CA",
     "C3",
     "C3TR",
     "CIB",
@@ -351,6 +352,38 @@ class C2f(nn.Module):
         y = [y[0], y[1]]
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
+
+
+class C2f_CA(C2f):
+    """C2f with Coordinate Attention (CA) for enhanced spatial feature extraction.
+
+    This block extends C2f by appending a Coordinate Attention module after the standard C2f forward pass, allowing
+    the network to capture long-range spatial dependencies along horizontal and vertical directions.
+
+    Attributes:
+        ca (CoordAtt): Coordinate Attention module applied to the output.
+    """
+
+    def __init__(
+        self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5, reduction: int = 32
+    ):
+        """Initialize C2f_CA block.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+            n (int): Number of Bottleneck blocks.
+            shortcut (bool): Whether to use shortcut connections.
+            g (int): Groups for convolutions.
+            e (float): Expansion ratio.
+            reduction (int): Channel reduction factor for the Coordinate Attention intermediate representation.
+        """
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.ca = CoordAtt(c2, c2, reduction=reduction)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through C2f_CA layer."""
+        return self.ca(super().forward(x))
 
 
 class C3(nn.Module):
