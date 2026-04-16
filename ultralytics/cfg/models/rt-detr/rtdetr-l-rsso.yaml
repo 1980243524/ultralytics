@@ -43,7 +43,7 @@ head:
 
   # Added P2 branch for dense tiny objects in remote sensing imagery
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
-  - [1, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 23 input_proj.P2 from backbone layer 1
+  - [1, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 23 input_proj.3 from backbone layer 1 (P2)
   - [[-2, -1], 1, Concat, [1]]
   - [-1, 3, RepC3, [256]] # 25 P2/4 small-object branch
 
@@ -51,7 +51,7 @@ head:
   - [-1, 1, Conv, [256, 3, 2]] # 26 downsample P2->P3
   - [[-1, 21], 1, Concat, [1]]
   - [-1, 3, RepC3, [256]] # 28 P3 refined
-  - [-1, 1, C2PSA, [256, 1]] # 29 P3 attention refinement
+  - [-1, 1, C2PSA, [256, 1]] # 29 P3 attention refinement (1 PSA block)
 
   - [-1, 1, Conv, [256, 3, 2]] # 30 downsample P3->P4
   - [[-1, 17], 1, Concat, [1]]
