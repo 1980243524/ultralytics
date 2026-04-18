@@ -9,6 +9,7 @@ set -u
 #     data=ultralytics/cfg/datasets/VisDrone.yaml \
 #     epochs=100 imgsz=640 batch=4 amp=False device=0 workers=8 \
 #     project=/home/xjc/work/ultralytics/runs/detect \
+#		pretrained=rtdetr-l.pt \
 #     name=rtdetr_train
 
 MAX_RETRIES="${MAX_RETRIES:-100}"
