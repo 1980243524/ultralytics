@@ -17,6 +17,8 @@ from .utils import _get_clones, inverse_sigmoid, multi_scale_deformable_attn_pyt
 
 __all__ = (
     "AIFI",
+    "DA_AIFI",
+    "DeformAttnSampler",
     "MLP",
     "DeformableTransformerDecoder",
     "DeformableTransformerDecoderLayer",
@@ -238,6 +240,138 @@ class AIFI(TransformerEncoderLayer):
         out_h = grid_h.flatten()[..., None] @ omega[None]
 
         return torch.cat([torch.sin(out_w), torch.cos(out_w), torch.sin(out_h), torch.cos(out_h)], 1)[None]
+
+
+class DeformAttnSampler(nn.Module):
+    """Deformable feature sampler using learned spatial offsets and bilinear grid sampling.
+
+    For each spatial position, predicts n_points offset vectors (dx, dy) and aggregates
+    features at those deformed locations using softmax-normalised learned weights.  This
+    allows the network to dynamically attend to informative (e.g. small-object) regions
+    beyond the fixed receptive field of standard convolutions.
+
+    Args:
+        c (int): Number of input/output channels.
+        n_points (int): Number of deformable sampling points per spatial location.
+    """
+
+    def __init__(self, c: int, n_points: int = 4):
+        """Initialise DeformAttnSampler."""
+        super().__init__()
+        self.n_points = n_points
+        # Two-layer offset predictor:  [B, n_points*2, H, W]
+        self.offset_conv = nn.Sequential(
+            nn.Conv2d(c, c // 4, 3, 1, 1, bias=True),
+            nn.GELU(),
+            nn.Conv2d(c // 4, n_points * 2, 1, bias=True),
+        )
+        # Learnable per-point aggregation weights (softmax over n_points)
+        self.weight_conv = nn.Conv2d(c, n_points, 1, bias=True)
+
+        # Zero-initialise offsets → identity map at the start of training
+        nn.init.zeros_(self.offset_conv[-1].weight)
+        nn.init.zeros_(self.offset_conv[-1].bias)
+        nn.init.constant_(self.weight_conv.weight, 1.0 / n_points)
+        nn.init.zeros_(self.weight_conv.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Aggregate deformably sampled features.
+
+        Args:
+            x (torch.Tensor): Input feature map [B, C, H, W].
+
+        Returns:
+            (torch.Tensor): Aggregated output feature map [B, C, H, W].
+        """
+        B, C, H, W = x.shape
+        # Offsets clamped to ±0.3 of normalised [-1, 1] coordinates
+        offsets = self.offset_conv(x).tanh() * 0.3  # [B, n_points*2, H, W]
+        weights = torch.softmax(self.weight_conv(x), dim=1)  # [B, n_points, H, W]
+
+        # Build reference grid in normalised [-1, 1] coordinates
+        gy, gx = torch.meshgrid(
+            torch.linspace(-1 + 1 / H, 1 - 1 / H, H, device=x.device, dtype=x.dtype),
+            torch.linspace(-1 + 1 / W, 1 - 1 / W, W, device=x.device, dtype=x.dtype),
+            indexing="ij",
+        )
+        ref_grid = torch.stack([gx, gy], dim=-1)  # [H, W, 2]
+
+        out = torch.zeros_like(x)
+        for p in range(self.n_points):
+            # Per-point offset: [B, H, W, 2]
+            delta = offsets[:, p * 2 : p * 2 + 2, :, :].permute(0, 2, 3, 1)
+            grid = (ref_grid.unsqueeze(0) + delta).clamp(-1.0, 1.0)  # [B, H, W, 2]
+            sampled = F.grid_sample(x, grid, align_corners=True, mode="bilinear", padding_mode="border")
+            out = out + weights[:, p : p + 1] * sampled  # weighted accumulation
+        return out
+
+
+class DA_AIFI(TransformerEncoderLayer):
+    """Deformable-Attention AIFI (DA-AIFI) for RT-DETR encoder.
+
+    Enhances the standard AIFI transformer encoder layer with a deformable context
+    sampling step before the multi-head self-attention.  A lightweight
+    DeformAttnSampler predicts n_points spatial offsets per location and aggregates
+    features at those positions, enabling the encoder to attend to informative
+    small-object regions that fall outside the regular grid.  The sampled context is
+    blended with the original features via a learnable scalar gate before the 2-D
+    sinusoidal positional embedding and standard self-attention.
+
+    Design rationale (vs. plain AIFI):
+    - AIFI's global self-attention is effective for semantic context but treats all
+      spatial positions equally, limiting sensitivity to small objects.
+    - DA-AIFI's deformable pre-sampling focuses on informative regions, improving
+      attention quality without replacing the proven AIFI computation graph.
+
+    Args:
+        c1 (int): Input channel dimension.
+        cm (int): Hidden dimension of the FFN.
+        num_heads (int): Number of self-attention heads.
+        dropout (float): Dropout probability.
+        act (nn.Module): Activation function for the FFN.
+        normalize_before (bool): Pre-LN if True, Post-LN otherwise.
+        n_points (int): Number of deformable sampling points.
+    """
+
+    def __init__(
+        self,
+        c1: int,
+        cm: int = 2048,
+        num_heads: int = 8,
+        dropout: float = 0.0,
+        act: nn.Module = nn.GELU(),
+        normalize_before: bool = False,
+        n_points: int = 4,
+    ):
+        """Initialise DA_AIFI with deformable sampler and learnable gate."""
+        super().__init__(c1, cm, num_heads, dropout, act, normalize_before)
+        self.deform_sampler = DeformAttnSampler(c1, n_points)
+        # Gate initialised to 0: sigmoid(0)=0.5 → equal blend at start; quickly learned
+        self.deform_gate = nn.Parameter(torch.zeros(1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass: deformable context enhancement then AIFI self-attention.
+
+        Args:
+            x (torch.Tensor): Input feature map [B, C, H, W].
+
+        Returns:
+            (torch.Tensor): Enhanced feature map [B, C, H, W].
+        """
+        c, h, w = x.shape[1:]
+
+        # 1. Deformable context sampling and gated blending
+        deformed = self.deform_sampler(x)
+        gate = torch.sigmoid(self.deform_gate)
+        x_in = (1.0 - gate) * x + gate * deformed  # [B, C, H, W]
+
+        # 2. 2-D sinusoidal positional embedding (reuse AIFI's static method)
+        pos = AIFI.build_2d_sincos_position_embedding(w, h, c).to(device=x.device, dtype=x.dtype)
+
+        # 3. Flatten to sequence, run TransformerEncoderLayer, reshape to 2-D
+        x_seq = x_in.flatten(2).permute(0, 2, 1)  # [B, H*W, C]
+        x_seq = super().forward(x_seq, pos=pos)    # [B, H*W, C]
+        return x_seq.permute(0, 2, 1).view(-1, c, h, w).contiguous()
 
 
 class TransformerLayer(nn.Module):

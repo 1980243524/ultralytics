@@ -13,6 +13,8 @@ import torch.nn as nn
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
+    DA_AIFI,
+    DeformAttnSampler,
     C1,
     C2,
     C2PSA,
@@ -48,6 +50,7 @@ from ultralytics.nn.modules import (
     DWConv,
     DWConvTranspose2d,
     Focus,
+    FreqRepC3,
     GhostBottleneck,
     GhostConv,
     HGBlock,
@@ -1785,6 +1788,7 @@ def parse_model(d, ch, verbose=True):
             DWConvTranspose2d,
             C3x,
             RepC3,
+            FreqRepC3,
             PSA,
             SCDown,
             C2fCIB,
@@ -1804,6 +1808,7 @@ def parse_model(d, ch, verbose=True):
             C3Ghost,
             C3x,
             RepC3,
+            FreqRepC3,
             C2fPSA,
             C2fCIB,
             C2PSA,
@@ -1853,7 +1858,7 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
-        elif m is AIFI:
+        elif m in {AIFI, DA_AIFI}:
             args = [ch[f], *args]
         elif m in frozenset({HGStem, HGBlock}):
             c1, cm, c2 = ch[f], args[0], args[1]

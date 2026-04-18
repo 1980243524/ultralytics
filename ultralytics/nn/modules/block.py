@@ -41,6 +41,7 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "ContrastiveHead",
+    "FreqRepC3",
     "GhostBottleneck",
     "HGBlock",
     "HGStem",
@@ -446,6 +447,72 @@ class RepC3(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass of RepC3 module."""
         return self.cv3(self.m(self.cv1(x)) + self.cv2(x))
+
+
+class FreqRepC3(nn.Module):
+    """Frequency-Aware RepC3 for small object detection in UAV imagery.
+
+    Extends RepC3 by decomposing features into high-frequency (fine detail) and
+    low-frequency (semantic) components via a learnable depthwise low-pass filter.
+    A gated high-frequency branch restores fine-grained spatial details lost during
+    downsampling, improving recall of small objects. The gate is initialised near
+    zero so the module starts as standard RepC3 and learns the optimal HF
+    contribution progressively.
+
+    Args:
+        c1 (int): Input channels.
+        c2 (int): Output channels.
+        n (int): Number of RepConv blocks in the main branch.
+        e (float): Expansion ratio.
+    """
+
+    def __init__(self, c1: int, c2: int, n: int = 3, e: float = 1.0):
+        """Initialise FreqRepC3 with frequency decomposition and gated HF branch."""
+        super().__init__()
+        c_ = int(c2 * e)
+
+        # Learnable depthwise low-pass filter (5×5 kernel, init as uniform average)
+        self.low_pass = nn.Conv2d(c1, c1, 5, padding=2, groups=c1, bias=False)
+        nn.init.constant_(self.low_pass.weight, 1.0 / 25.0)
+
+        # Main RepC3 branches (semantic path, operates on full features)
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+        self.m = nn.Sequential(*[RepConv(c_, c_) for _ in range(n)])
+
+        # Lighter high-frequency detail branch (single RepConv to save compute)
+        self.cv_hf = Conv(c1, c_, 1, 1)
+        self.m_hf = RepConv(c_, c_)
+
+        # Per-channel gate: sigmoid(-4) ≈ 0.018 → near-zero HF contribution at init
+        self.hf_gate = nn.Parameter(torch.full((1, c_, 1, 1), -4.0))
+
+        self.cv3 = Conv(c_, c2, 1, 1) if c_ != c2 else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass with frequency-aware gated fusion.
+
+        Args:
+            x (torch.Tensor): Input feature map [B, c1, H, W].
+
+        Returns:
+            (torch.Tensor): Output feature map [B, c2, H, W].
+        """
+        # Frequency decomposition
+        low = self.low_pass(x)
+        high = x - low  # high-frequency residual: edges, textures, fine details
+
+        # Main semantic branch (identical to RepC3)
+        main = self.m(self.cv1(x)) + self.cv2(x)
+
+        # High-frequency detail enhancement branch
+        hf = self.m_hf(self.cv_hf(high))
+
+        # Gated fusion: HF contribution grows as hf_gate is learned
+        gate = torch.sigmoid(self.hf_gate)
+        out = main + gate * hf
+
+        return self.cv3(out)
 
 
 class C3TR(C3):

@@ -47,6 +47,7 @@ from .block import (
     CBFuse,
     CBLinear,
     ContrastiveHead,
+    FreqRepC3,
     GhostBottleneck,
     HGBlock,
     HGStem,
@@ -95,6 +96,8 @@ from .head import (
 )
 from .transformer import (
     AIFI,
+    DA_AIFI,
+    DeformAttnSampler,
     MLP,
     DeformableTransformerDecoder,
     DeformableTransformerDecoderLayer,
@@ -108,6 +111,8 @@ from .transformer import (
 
 __all__ = (
     "AIFI",
+    "DA_AIFI",
+    "DeformAttnSampler",
     "C1",
     "C2",
     "C2PSA",
@@ -153,6 +158,7 @@ __all__ = (
     "DeformableTransformerDecoderLayer",
     "Detect",
     "Focus",
+    "FreqRepC3",
     "GhostBottleneck",
     "GhostConv",
     "HGBlock",
