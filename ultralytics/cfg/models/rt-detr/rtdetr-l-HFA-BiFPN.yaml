@@ -1,0 +1,50 @@
+# Ultralytics RT-DETR-l with HFA-BiFPN (High-Frequency Aware BiFPN) Head
+# Designed to retain micro object high-frequencies and enable deep skip connections safely.
+
+nc: 80
+scales: 
+  l: [1.00, 1.00, 1024]
+
+# ========= 原生骨干网络 (Baseline Backbone) ========= 
+backbone:
+  - [-1, 1, HGStem, [32, 48]] # 0
+  - [-1, 6, HGBlock, [48, 128, 3]] # 1
+  - [-1, 1, DWConv, [128, 3, 2, 1, False]] # 2
+  - [-1, 6, HGBlock, [96, 512, 3]] # 3
+  - [-1, 1, DWConv, [512, 3, 2, 1, False]] # 4
+  - [-1, 6, HGBlock, [192, 1024, 5, True, False]] # 5
+  - [-1, 6, HGBlock, [192, 1024, 5, True, True]] # 6
+  - [-1, 6, HGBlock, [192, 1024, 5, True, True]] # 7 - P4特征节点
+  - [-1, 1, DWConv, [1024, 3, 2, 1, False]] # 8
+  - [-1, 6, HGBlock, [384, 2048, 5, True, False]] # 9 - P5特征节点
+
+# ========= 创新颈部：HFA-BiFPN Neck =========
+head:
+  - [-1, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 10: input_proj.2 (P5_in 原始分辨率特征) 
+  - [-1, 1, AIFI, [1024, 8]] # 11
+  - [-1, 1, Conv, [256, 1, 1]] # 12: Y5 (P5_lateral)
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 13
+  - [7, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 14: input_proj.1 (P4_in 原始分辨率特征，非常清晰)
+  - [[-2, -1], 1, Concat, [1]] # 15
+  - [-1, 3, RepC3, [256]] # 16: fpn_blocks.0
+  - [-1, 1, Conv, [256, 1, 1]] # 17: Y4 (P4_lateral)
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 18
+  - [3, 1, Conv, [256, 1, 1, None, 1, 1, False]] # 19: input_proj.0 (P3_in 极端高分辨率的微小目标特征)
+  - [[-2, -1], 1, Concat, [1]] # 20
+  - [-1, 3, RepC3, [256]] # 21: P3_out (小目标最终检测用特征)
+
+  # --- BiFPN Bottom-up P4 路 ---
+  - [-1, 1, Conv, [256, 3, 2]] # 22 downsample (丢失高频细节)
+  - [[17, 14], 1, HFA_Add, [256]] # 23: 【你的创新点】使用跳跃连接(14)的高频细节, 注射到被污染的中间特征(17)中！
+  - [[22, -1], 1, Concat, [1]] # 24 Cat下采样特征与HFA加强特征
+  - [-1, 3, RepC3, [256]] # 25: P4_out pan_blocks.0 
+
+  # --- BiFPN Bottom-up P5 路 ---
+  - [-1, 1, Conv, [256, 3, 2]] # 26 downsample 
+  - [[12, 10], 1, HFA_Add, [256]] # 27: 【你的创新点】引入P5的跳跃连接与高频提取
+  - [[26, -1], 1, Concat, [1]] # 28 Cat
+  - [-1, 3, RepC3, [256]] # 29: P5_out pan_blocks.1
+
+  - [[21, 25, 29], 1, RTDETRDecoder, [nc]] # 30 最后交给头去推测目标

@@ -12,6 +12,7 @@ import torch.nn as nn
 
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
+    HFA_Add,
     AIFI,
     C1,
     C2,
@@ -1865,6 +1866,9 @@ def parse_model(d, ch, verbose=True):
             c2 = args[1] if args[3] else args[1] * 4
         elif m is torch.nn.BatchNorm2d:
             args = [ch[f]]
+        elif m is HFA_Add:
+            c2 = ch[f[0] if isinstance(f, list) else f]  # output channel is the first branch channel (lateral)
+            args = [c2, args[0]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
         elif m in frozenset(

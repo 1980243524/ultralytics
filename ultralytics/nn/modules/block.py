@@ -2318,3 +2318,32 @@ class RealNVP(nn.Module):
             self.float()
         z, log_det = self.backward_p(x)
         return self.prior.log_prob(z) + log_det
+
+class HFA_Add(nn.Module):
+    """High-Frequency Aware Addition for BiFPN skip connections in UAV detection."""
+    def __init__(self, c1, c2=None):
+        super().__init__()
+        # Ultralytics 解析器将多输入的 c1 解析为 list
+        c1 = c1[0] if isinstance(c1, list) else c1
+        self.alpha = nn.Parameter(torch.zeros(1))
+        self.sa = nn.Conv2d(2, 1, 7, padding=3, bias=False)
+
+    def forward(self, x):
+        import torch.nn.functional as F
+        # x 接收列表 [特征提取线的lateral_feature, BiFPN跨层传来的skip_feature]
+        feat_lat, feat_skip = x[0], x[1]
+        
+        # 1. 使用平均池化相减的方式，无参提取含有丰富边缘和轮廓的高频信息 (High-frequency details)
+        avg_x = F.avg_pool2d(feat_skip, kernel_size=3, stride=1, padding=1)
+        hf = feat_skip - avg_x
+        
+        # 2. 基于高频信息生成空间权重 (Spatial Attention map)
+        max_out, _ = torch.max(hf, dim=1, keepdim=True)
+        mean_out = torch.mean(hf, dim=1, keepdim=True)
+        sa_weight = torch.sigmoid(self.sa(torch.cat([max_out, mean_out], dim=1)))
+        
+        # 3. 用注意力掩码重新加权高分辨率原始特征
+        hf_feat = feat_skip * sa_weight
+        
+        # 4. 零初始化残差融合：让网络起步时等效为没加模块，完美继承预训练权重
+        return feat_lat + self.alpha * hf_feat
